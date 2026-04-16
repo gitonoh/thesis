@@ -331,3 +331,4 @@ ggplot(irf_asymmetric, aes(x = h, y = estimate, color = term)) +
          x = "Horizon (quarters)", y = "Response of Active Rebalancing") +
     theme_minimal(base_size = 14) +
     theme(legend.title = element_blank())
+
