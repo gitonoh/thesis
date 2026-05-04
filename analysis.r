@@ -1,3 +1,5 @@
+# color: ac7a33, 4e916e, 436f9c, 8e517a
+
 library(tidyverse)
 
 df <- read.csv("df.csv", header = TRUE, stringsAsFactors = FALSE) |>
@@ -17,6 +19,26 @@ df <- df |>
     ungroup()
 
 
+# check AR(p) structure of dlnL by category
+library(forecast)
+
+df_category <- df |> filter(Category == "Top1", !is.na(dlnL))
+max_p <- 5
+aic_vals <- numeric(max_p)
+bic_vals <- numeric(max_p)
+for (p in 1:max_p) {
+    model <- Arima(df_category$dlnL, order = c(p, 0, 0))
+    aic_vals[p] <- AIC(model)
+    bic_vals[p] <- BIC(model)
+}
+aic_vals
+bic_vals
+which.min(aic_vals)   # best lag by AIC
+which.min(bic_vals)   # best lag by BIC
+
+# -> Both AIC and BIC suggest AR(1) is sufficient for dlnL across all categories.
+
+
 # Estimate local (global) shocks
 estimate_shocks <- function(df) {
   df2 <- df |> filter(!is.na(dlnL), !is.na(dlnL_lag))
@@ -34,26 +56,31 @@ shock_df <- df |>
     map_dfr(estimate_shocks)
 
 # plot (local shock by category)
-shock_df %>%
+shock_loc <- shock_df %>%
     filter(!Category %in% c("RemainingTop1", "TopPt1")) %>%
     mutate(Category = factor(Category, levels = c("Next9", "Top1", "Bottom50", "Next40"))) %>%
     ggplot(aes(x = Date, y = shock_loc)) +
     geom_line() +
     facet_wrap(~Category, scales = "free_y") +
-    labs(title = "Local Valuation Shocks by Wealth Group", x = "Date", y = "Shock") +
+    labs(title = NULL, x = NULL, y = NULL) +
     theme_minimal(base_size = 14) +
     theme(legend.title = element_blank())
 
+# save shock_loc plot
+# ggsave("figures/shock_loc.png", shock_loc, width = 10, height = 6, dpi = 350)
+
 # plot (global shock by category)
-shock_df %>%
+shock_glo <- shock_df %>%
     filter(!Category %in% c("RemainingTop1", "TopPt1")) %>%
     mutate(Category = factor(Category, levels = c("Next9", "Top1", "Bottom50", "Next40"))) %>%
     ggplot(aes(x = Date, y = shock_glo)) +
     geom_line() +
     facet_wrap(~Category, scales = "free_y") +
-    labs(title = "Global Valuation Shocks by Wealth Group", x = "Date", y = "Shock") +
+    labs(title = NULL, x = NULL, y = NULL) +
     theme_minimal(base_size = 14) +
     theme(legend.title = element_blank())
+
+# ggsave("figures/shock_glo.png", shock_glo, width = 10, height = 6, dpi = 350)
 
 # report mean and sd of shocks by category
 shock_df %>%
@@ -106,8 +133,8 @@ shock_df <- read.csv("shock_df.csv", header = TRUE, stringsAsFactors = FALSE) |>
 
 # rename either shock_loc or shock_glo to shock and drop the other
 shock_df <- shock_df |> 
-    rename(shock = shock_glo) |> 
-    dplyr::select(-shock_loc)
+    rename(shock = shock_loc) |> 
+    dplyr::select(-shock_glo)
 
 # rebalancing decomposition --------------------------------------------------
 
@@ -175,6 +202,25 @@ compute_active_rebalancing <- function(df, h) {
         )
 }
 
+# plot Mkt_RF and its cumulative return from the initial date
+return <- shock_df %>%
+    filter(Category == "Bottom50") %>%
+    arrange(Date) %>%
+    mutate(cum_return = cumprod(1 + Mkt_RF) - 1) %>%
+    pivot_longer(c(Mkt_RF, cum_return), names_to = "series", values_to = "value") %>%
+    mutate(series = factor(series, levels = c("cum_return", "Mkt_RF"))) %>%
+    ggplot(aes(x = Date, y = value)) +
+    geom_line() +
+    facet_wrap(~series, ncol = 1, scales = "free_y",
+               labeller = as_labeller(c(
+                   cum_return = "Cumulative Excess Return",
+                   Mkt_RF = "Market Return - Risk Free Rate"
+               ))) +
+    labs(title = NULL, x = NULL, y = NULL) +
+    theme_minimal(base_size = 14)
+
+# ggsave("figures/return_cum.png", return, width = 10, height = 6, dpi = 350)
+
 # core: local projections ----------------------------------------------------
 # Estimate local-projection regression for a single group at horizon h
 estimate_lp_h <- function(df, h) {
@@ -183,13 +229,13 @@ estimate_lp_h <- function(df, h) {
         filter(!is.na(.data$AS_h), !is.na(.data$shock))
 
     # Regress raw share without controls --- Consistent with BVAR (using global shocks)
-    m <- lm(S_h ~ shock + dplyr::lag(S_h), data = df_h)
+    # m <- lm(S_h ~ shock + dplyr::lag(S_h), data = df_h)
 
     # Omit the lag not to absorb the shock effect
     # m <- lm(S_h ~ shock, data = df_h)
 
     # Regress raw share on shock + controls
-    # m <- lm(S_h ~ shock + dplyr::lag(S_h) + Fixed.income + Private.businesses + Real.estate + Liabilities, data = df_h)
+    m <- lm(S_h ~ shock + dplyr::lag(S_h) + Fixed.income + Private.businesses + Real.estate + Liabilities, data = df_h)
 
     # Regress cash share on shock + controls
     # m <- lm(S_Cash_h ~ shock + dplyr::lag(S_Cash_h) + Fixed.income + Private.businesses + Real.estate + Liabilities, data = df_h)
@@ -224,14 +270,24 @@ irf <- lp_results_all |>
     filter(!group %in% c("RemainingTop1", "TopPt1")) |>
     mutate(group = factor(group, levels = c("Next9", "Top1", "Bottom50", "Next40")))
 
-ggplot(irf, aes(x = h, y = estimate, ymin = estimate - 1.96*std.error,
-                ymax = estimate + 1.96*std.error, color = group)) +
-  geom_line(size = 1.1) +
-  geom_ribbon(alpha = 0.15, color = NA) +
-  facet_wrap(~group, scales = "free_y") +
-  labs(title = "Local Projections: Customized Response to Valuation Shocks",
-       x = "Horizon (quarters)", y = NULL) +
-  theme_minimal(base_size = 14)
+ggplot(irf, aes(x = h, y = estimate)) +
+    geom_line(size = 1.1, color = "#ac7a33") +
+    geom_ribbon(
+        aes(ymin = estimate - 2 * std.error, ymax = estimate + 2 * std.error),
+        fill = "#ac7a33",
+        alpha = 0.15,
+        color = NA
+    ) +
+    geom_ribbon(
+        aes(ymin = estimate - 1 * std.error, ymax = estimate + 1 * std.error),
+        fill = "#ac7a33",
+        alpha = 0.15,
+        color = NA
+    ) +
+    facet_wrap(~ group, scales = "free_y") +
+    labs(title = NULL, x = NULL, y = NULL) +
+    theme_minimal(base_size = 14) +
+    theme(legend.position = "none")
 
 
 # time-varying local projections -------------------------------------------------------
@@ -265,8 +321,11 @@ estimate_lp_h_period <- function(df, h, start_date = NULL, end_date = NULL) {
     }
 
     m <- lm(
-        AS_h ~ shock + dplyr::lag(AS_h) + Fixed.income +
-            Private.businesses + Real.estate + Liabilities,
+        # active component
+        AS_h ~ shock + dplyr::lag(AS_h) + Fixed.income + Private.businesses + Real.estate + Liabilities,
+        # raw share
+        # S_h ~ shock + dplyr::lag(S_h) + Fixed.income + Private.businesses + Real.estate + Liabilities,
+        
         data = df_h
     )
 
@@ -306,6 +365,24 @@ lp_results_post <- run_lp_period(
     end_date = NULL
 )
 
+# store irf_pre_raw and irf_post_raw
+irf_pre_raw <- lp_results_pre |>
+    dplyr::filter(term == "shock") |>
+    dplyr::filter(!group %in% c("RemainingTop1", "TopPt1")) |>
+    dplyr::mutate(
+        group = factor(group, levels = c("Next9", "Top1", "Bottom50", "Next40"))
+    ) |>
+    dplyr::select(group, h, estimate, std.error, p.value)
+
+irf_post_raw <- lp_results_post |>
+    dplyr::filter(term == "shock") |>
+    dplyr::filter(!group %in% c("RemainingTop1", "TopPt1")) |>
+    dplyr::mutate(
+        group = factor(group, levels = c("Next9", "Top1", "Bottom50", "Next40"))
+    ) |>
+    dplyr::select(group, h, estimate, std.error, p.value)
+
+# active component
 irf_pre <- lp_results_pre |>
     dplyr::filter(term == "shock") |>
     dplyr::filter(!group %in% c("RemainingTop1", "TopPt1")) |>
@@ -322,45 +399,158 @@ irf_post <- lp_results_post |>
     ) |>
     dplyr::select(group, h, estimate, std.error, p.value)
 
-# Plot 1: Pre-2008
-ggplot(irf_pre, aes(x = h, y = estimate)) +
-    geom_line(size = 1.1, color = "#1f77b4") +
-    geom_ribbon(
-        aes(
-            ymin = estimate - 1.96 * std.error,
-            ymax = estimate + 1.96 * std.error
-        ),
-        alpha = 0.15,
-        fill = "#1f77b4",
-        color = NA
-    ) +
-    facet_wrap(~group, scales = "free_y") +
-    labs(
-        title = "Local Projections (Pre-2008): Response to Valuation Shocks",
-        x = "Horizon (quarters)",
-        y = "Response of Active Rebalancing"
-    ) +
-    theme_minimal(base_size = 14)
+# report magnitude and volatility using from both irf_pre and irf_post
+irf_pre %>%
+    group_by(group) %>%
+    summarise(
+        mean_estimate = mean(estimate, na.rm = TRUE),
+        sd_estimate = sd(estimate, na.rm = TRUE)
+    )
+irf_post %>%
+    group_by(group) %>%
+    summarise(
+        mean_estimate = mean(estimate, na.rm = TRUE),
+        sd_estimate = sd(estimate, na.rm = TRUE)
+    )
+
+# mechanical component (passive drift) = raw share response - active component response
+irf_mechanical_pre <- irf_pre_raw %>%
+    left_join(irf_pre, by = c("group", "h"), suffix = c("_raw", "_active")) %>%
+    mutate(estimate_mechanical = estimate_raw - estimate_active) %>%
+    select(group, h, estimate_mechanical)
+
+irf_mechanical_post <- irf_post_raw %>%
+    left_join(irf_post, by = c("group", "h"), suffix = c("_raw", "_active")) %>%
+    mutate(estimate_mechanical = estimate_raw - estimate_active) %>%
+    select(group, h, estimate_mechanical)
+
+plot_pre <- ggplot(
+  irf_pre,
+  aes(x = h, y = estimate)
+) +
+  geom_line(
+    aes(linetype = "behavioral"),
+    size = 1.1,
+    color = "black"
+  ) +
+  geom_line(
+    data = irf_mechanical_pre,
+    aes(x = h, y = estimate_mechanical, linetype = "mechanical"),
+    color = "black",
+    size = 1.1
+  ) +
+  geom_ribbon(
+    aes(ymin = estimate - 2 * std.error, ymax = estimate + 2 * std.error),
+    alpha = 0.25,
+    fill = "black",
+    color = NA
+  ) +
+  geom_ribbon(
+    aes(ymin = estimate - 1 * std.error, ymax = estimate + 1 * std.error),
+    alpha = 0.25,
+    fill = "black",
+    color = NA
+  ) +
+  geom_hline(yintercept = 0, color = "black", size = 0.5, linetype = "dotted") +
+  facet_wrap(
+    ~group,
+    scales = "free_y",
+    labeller = as_labeller(
+      c(
+        "Next9" = "Next 9%",
+        "Top1" = "Top 1%",
+        "Bottom50" = "Bottom 50%",
+        "Next40" = "Next 40%"
+      )
+    )
+  ) +
+  labs(title = NULL, x = NULL, y = NULL) +
+  scale_linetype_manual(
+    name = "Component",
+    values = c(behavioral = "solid", mechanical = "dashed"),
+    labels = c(
+      behavioral = "behavioral component",
+      mechanical = "mechanical component\n(counterfactual)"
+    )
+  ) +
+theme_minimal(base_size = 14) +
+theme(
+    legend.text = element_text(size = 8),
+    legend.key.size = unit(0.5, "cm"),
+    legend.position = c(0.98, 1),
+    legend.justification = c(1, 1),
+    legend.background = element_rect(fill = alpha("white", 0.5), color = NA)
+) +
+guides(linetype = guide_legend(title = NULL))
+
+plot_pre
+
+#ggsave("figures/irf_loc_pre_active_flexible.png", plot_pre, width = 10, height = 6, dpi = 350)
 
 # Plot 2: Post-2008
-ggplot(irf_post, aes(x = h, y = estimate)) +
-    geom_line(size = 1.1, color = "#d62728") +
-    geom_ribbon(
-        aes(
-            ymin = estimate - 1.96 * std.error,
-            ymax = estimate + 1.96 * std.error
-        ),
-        alpha = 0.15,
-        fill = "#d62728",
-        color = NA
+plot_post <- ggplot(
+  irf_post,
+  aes(x = h, y = estimate)
+) +
+  geom_line(
+    aes(linetype = "behavioral"),
+    size = 1.1,
+    color = "black"
+  ) +
+  geom_line(
+    data = irf_mechanical_post,
+    aes(x = h, y = estimate_mechanical, linetype = "mechanical"),
+    color = "black",
+    size = 1.1
+  ) +
+  geom_ribbon(
+    aes(ymin = estimate - 2 * std.error, ymax = estimate + 2 * std.error),
+    alpha = 0.25,
+    fill = "black",
+    color = NA
+  ) +
+  geom_ribbon(
+    aes(ymin = estimate - 1 * std.error, ymax = estimate + 1 * std.error),
+    alpha = 0.25,
+    fill = "black",
+    color = NA
+  ) +
+  geom_hline(yintercept = 0, color = "black", size = 0.5, linetype = "dotted") +
+  facet_wrap(
+    ~group,
+    scales = "free_y",
+    labeller = as_labeller(
+      c(
+        "Next9" = "Next 9%",
+        "Top1" = "Top 1%",
+        "Bottom50" = "Bottom 50%",
+        "Next40" = "Next 40%"
+      )
+    )
+  ) +
+  labs(title = NULL, x = NULL, y = NULL) +
+  scale_linetype_manual(
+    name = "Component",
+    values = c(behavioral = "solid", mechanical = "dashed"),
+    labels = c(
+      behavioral = "behavioral component",
+      mechanical = "mechanical component\n(counterfactual)"
+    )
+  ) +
+    theme_minimal(base_size = 14) +
+    theme(
+        legend.text = element_text(size = 8),
+        legend.key.size = unit(0.5, "cm"),
+        legend.position = c(0.98, 1),
+        legend.justification = c(1, 1),
+        legend.background = element_rect(fill = alpha("white", 0.5), color = NA)
     ) +
-    facet_wrap(~group, scales = "free_y") +
-    labs(
-        title = "Local Projections (Post-2008): Response to Valuation Shocks",
-        x = "Horizon (quarters)",
-        y = "Response of Active Rebalancing"
-    ) +
-    theme_minimal(base_size = 14)
+    guides(linetype = guide_legend(title = NULL))
+
+
+plot_post
+
+#ggsave("figures/irf_loc_post_active_flexible.png", plot_post, width = 10, height = 6, dpi = 350)
 
 # Assymmetric responses -------------------------------------------------------
 
@@ -387,13 +577,13 @@ estimate_lp_h_asymmetric <- function(df, h) {
     # m <- lm(AS_h ~ shock_pos + shock_neg + dplyr::lag(AS_h) + Fixed.income + Private.businesses + Real.estate + Liabilities, data = df_h)
 
     # Regress raw equity share
-    # m <- lm(S_h ~ shock_pos + shock_neg + dplyr::lag(S_h) + Fixed.income + Private.businesses + Real.estate + Liabilities, data = df_h)
+    m <- lm(S_h ~ shock_pos + shock_neg + dplyr::lag(S_h) + Fixed.income + Private.businesses + Real.estate + Liabilities, data = df_h)
 
     # Regress cash share
     # m <- lm(S_Cash_h ~ shock_pos + shock_neg + dplyr::lag(S_Cash_h) + Fixed.income + Private.businesses + Real.estate + Liabilities, data = df_h)
 
    # Regress raw equity share with the lag and without controls --- consistent with BVAR
-   m <- lm(S_h ~ shock_pos + shock_neg + dplyr::lag(S_h), data = df_h)
+   # m <- lm(S_h ~ shock_pos + shock_neg + dplyr::lag(S_h), data = df_h)
 
     broom::tidy(m) %>%
         mutate(h = h, group = unique(df$Category))
@@ -411,18 +601,132 @@ irf_asymmetric <- lp_results_asymmetric |>
     # rearrange by next9, top1, bottom50, next40 in order
     mutate(group = factor(group, levels = c("Next9", "Top1", "Bottom50", "Next40"))) |>
     filter(term %in% c("shock_pos", "shock_neg")) |>
-    dplyr::select(group, h, term, estimate, std.error, p.value) 
+    dplyr::select(group, h, term, estimate, std.error, p.value)
 
-ggplot(irf_asymmetric, aes(x = h, y = estimate, color = term)) +
+# preserve results in raw share
+irf_asymmetric_raw <- lp_results_asymmetric |>
+    filter(term %in% c("shock_pos", "shock_neg")) |>
+    filter(!group %in% c("RemainingTop1", "TopPt1")) |>
+    # rearrange by next9, top1, bottom50, next40 in order
+    mutate(group = factor(group, levels = c("Next9", "Top1", "Bottom50", "Next40"))) |>
+    filter(term %in% c("shock_pos", "shock_neg")) |>
+    dplyr::select(group, h, term, estimate, std.error, p.value)
+
+# plot irfs without dashed lines
+irf_raw <- ggplot(irf_asymmetric_raw, aes(x = h, y = estimate, color = term)) +
     geom_line(size = 1.1) +
-    facet_wrap(~group, scales = "free_y") +
-    labs(title = "Local Projections: Customized Response to Positive vs Negative Valuation Shocks",
-         x = "Horizon (quarters)", y = "Response of Active Rebalancing") +
-    theme_minimal(base_size = 14) +
-    theme(legend.title = element_blank())
+        geom_ribbon(
+            aes(
+                ymin = estimate - 1.96 * std.error,
+                ymax = estimate + 1.96 * std.error,
+                fill = term
+            ),
+            alpha = 0.15,
+            color = NA,
+            show.legend = FALSE
+        ) +
+    geom_hline(yintercept = 0, color = "black", size = 0.5, linetype = "dotted") +
+    facet_wrap(~group, scales = "free_y",
+    labeller = as_labeller(c(
+        "Next9" = "Next 9%",
+        "Top1" = "Top 1%",
+        "Bottom50" = "Bottom 50%",
+        "Next40" = "Next 40%"
+    ))) +
+    scale_color_manual(
+        values = c("shock_pos" = "#4e916e", "shock_neg" = "#8e517a"),
+        breaks = c("shock_pos", "shock_neg"),
+        labels = c("positive shock", "negative shock")
+    ) +
+    scale_fill_manual(
+        values = c("shock_pos" = "#4e916e", "shock_neg" = "#8e517a"),
+        breaks = c("shock_pos", "shock_neg"),
+        labels = c("positive shock", "negative shock")
+    ) +
+    labs(title = NULL, x = NULL, y = NULL) +
+    theme_minimal() +
+    theme(
+        legend.title = element_blank(),
+        legend.text = element_text(size = 8),
+        legend.key.size = unit(0.5, "cm"),
+        legend.position = c(0.98, 1),
+        legend.justification = c(1, 1),
+        legend.background = element_rect(fill = alpha("white", 0.5), color = NA)
+    )
+
+irf_raw
+
+ggsave("figures/irf_loc_asym_cash.png", irf_raw, width = 10, height = 6, dpi = 350)
+
+# -(passive drift) = active component - raw share
+# irf_asymmetric - irf_asymmetric_raw
+passive_drift <- irf_asymmetric %>%
+    left_join(irf_asymmetric_raw, by = c("group", "h", "term"), suffix = c("_active", "_raw")) %>%
+    mutate(estimate_passive = -(estimate_active - estimate_raw)) %>%
+    select(group, h, term, estimate_passive)
+
+
+irf <- ggplot(irf_asymmetric, aes(x = h, y = estimate, color = term)) +
+        geom_line(aes(linetype = "active"), size = 1.1) +
+        geom_line(
+            data = passive_drift,
+            aes(x = h, y = estimate_passive, color = term, linetype = "passive"),
+            size = 1.1,
+            inherit.aes = FALSE
+        ) +
+        geom_ribbon(
+            aes(
+                ymin = estimate - 1.96 * std.error,
+                ymax = estimate + 1.96 * std.error,
+                fill = term
+            ),
+            alpha = 0.15,
+            color = NA,
+            show.legend = FALSE
+        ) +
+        geom_hline(yintercept = 0, color = "black", size = 0.5, linetype = "dotted") +
+        facet_wrap(
+            ~group,
+            scales = "free_y",
+            labeller = as_labeller(c(
+                "Next9" = "Next 9%",
+                "Top1" = "Top 1%",
+                "Bottom50" = "Bottom 50%",
+                "Next40" = "Next 40%"
+            ))
+        ) +
+        scale_color_manual(
+            values = c("shock_pos" = "#4e916e", "shock_neg" = "#8e517a"),
+            breaks = c("shock_pos", "shock_neg"),
+            labels = c("positive shock", "negative shock")
+        ) +
+        scale_fill_manual(
+            values = c("shock_pos" = "#4e916e", "shock_neg" = "#8e517a"),
+            breaks = c("shock_pos", "shock_neg"),
+            labels = c("positive shock", "negative shock")
+        ) +
+        scale_linetype_manual(
+            name = "Component",
+            values = c(active = "solid", passive = "dashed"),
+            labels = c(active = "behavioral component", passive = "mechanical component\n(counterfactual)")
+        ) +
+        labs(title = NULL, x = NULL, y = NULL) +
+        theme_minimal(base_size = 14) +
+        theme(
+            legend.title = element_blank(),
+            legend.text = element_text(size = 8),
+            legend.key.size = unit(0.5, "cm"),
+            legend.position = c(0.98, 1),
+            legend.justification = c(1, 1),
+            legend.background = element_rect(fill = alpha("white", 0.5), color = NA)
+        )
+irf
+
+# ggsave("figures/irf_loc_asym_active_flexible.png", irf, width = 10, height = 6, dpi = 350)
 
 
 # Panel LPs -------------------------------------------------------
+# set shock global, benchmark general
 
 library(fixest)
 
@@ -453,9 +757,9 @@ cross_group_results <- purrr::map(horizons, function(h_value) {
 
     mod_h <- fixest::feols(
         # without controls
-        AS_h ~ shock:Category + AS_h_lag | Category + Date,
+        # AS_h ~ shock:Category + AS_h_lag | Category + Date,
         # with controls
-        # AS_h ~ shock:Category + AS_h_lag + Fixed.income + Private.businesses + Real.estate + Liabilities | Category + Date,
+        AS_h ~ shock:Category + AS_h_lag + Fixed.income + Private.businesses + Real.estate + Liabilities | Category + Date,
         data = data_h,
         vcov = "hetero"
 
@@ -493,7 +797,7 @@ cross_group_results <- purrr::map(horizons, function(h_value) {
 cross_group_tests <- purrr::map_dfr(cross_group_results, "tests")
 print(cross_group_tests, n = Inf)
 
-mod <- cross_group_results[[1]]$mod
+mod <- cross_group_results[[8]]$mod
 mod
 
 # Bayesian VAR -------------------------------------------------------------------------
