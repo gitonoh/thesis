@@ -22,10 +22,10 @@ df <- df |>
 # check AR(p) structure of dlnL by category
 library(forecast)
 
-df_category <- df |> filter(Category == "Bottom50", !is.na(dlnL))
+df_category <- df |> filter(Category == "TopPt1", !is.na(dlnL))
 max_p <- 5
-aic_vals <- numeric(max_p)
 bic_vals <- numeric(max_p)
+aic_vals <- numeric(max_p)
 for (p in 1:max_p) {
     model <- Arima(df_category$dlnL, order = c(p, 0, 0))
     aic_vals[p] <- AIC(model)
@@ -155,8 +155,8 @@ shock_df <- read.csv("shock_df.csv", header = TRUE, stringsAsFactors = FALSE) |>
 
 # rename either shock_loc or shock_glo to shock and drop the other
 shock_df <- shock_df |> 
-    rename(shock = shock_loc) |> 
-    dplyr::select(-shock_glo)
+    rename(shock = shock_glo) |> 
+    dplyr::select(-shock_loc)
 
 # rebalancing decomposition --------------------------------------------------
 
@@ -230,9 +230,9 @@ compute_active_rebalancing <- function(df, h) {
             NA_real_
         } else {
             # general passive drift
-            prod(1 + df$Mkt_RF[(i + 1):(i + h)])
+            # prod(1 + df$Mkt_RF[(i + 1):(i + h)])
             # specific passive drift using regression results
-            # prod(1 + df$passive_return[(i + 1):(i + h)])
+            prod(1 + df$passive_return[(i + 1):(i + h)])
         }
     }, numeric(1))
 
@@ -332,13 +332,13 @@ estimate_lp_h <- function(df, h) {
     # m <- lm(S_h ~ shock, data = df_h)
 
     # Regress raw share on shock + controls
-    m <- lm(S_h ~ shock + dplyr::lag(S_h) + Private.businesses + Real.estate + Liabilities, data = df_h)
+    # m <- lm(S_h ~ shock + dplyr::lag(S_h) + Private.businesses + Real.estate + Liabilities, data = df_h)
 
     # Regress raw share on shock + controls + lagged dependent variable using total financial assets as denominator
     # m <- lm(FS_h ~ shock + dplyr::lag(FS_h) + Liabilities, data = df_h)
 
     # Regress active share on shock + controls + lagged dependent variable
-    # m <- lm(AS_h ~ shock + dplyr::lag(AS_h) + Private.businesses + Real.estate + Liabilities, data = df_h)
+    m <- lm(AS_h ~ shock + dplyr::lag(AS_h) + Private.businesses + Real.estate + Liabilities, data = df_h)
 
     # Regress active share on shock + controls + lagged dependent variable using total financial assets as denominator
     # m <- lm(AFS_h ~ shock + dplyr::lag(AFS_h) + Liabilities, data = df_h)
@@ -823,20 +823,20 @@ horizons <- 1:8
 shock_df %>%
     group_by(Category) %>%
     summarise(
-        n_positive = sum(shock_loc_raw > 0, na.rm = TRUE),
-        n_negative = sum(shock_loc_raw < 0, na.rm = TRUE)
+        n_positive = sum(shock_glo_raw > 0, na.rm = TRUE),
+        n_negative = sum(shock_glo_raw < 0, na.rm = TRUE)
     )
 
 estimate_lp_h_asymmetric <- function(df, h) {
     df_h <- compute_active_rebalancing(df, h) %>%
-        filter(!is.na(.data$AS_h), !is.na(.data$shock_loc_raw))
+        filter(!is.na(.data$AS_h), !is.na(.data$shock_glo_raw))
 
     # Create separate variables for positive and negative shocks
     df_h <- df_h %>%
         mutate(
             # split first, then standardize to 1sd shock
-            shock_pos_raw = ifelse(shock_loc_raw > 0, shock_loc_raw, 0),
-            shock_neg_raw = ifelse(shock_loc_raw < 0, shock_loc_raw, 0),
+            shock_pos_raw = ifelse(shock_glo_raw > 0, shock_glo_raw, 0),
+            shock_neg_raw = ifelse(shock_glo_raw < 0, shock_glo_raw, 0),
             shock_pos = shock_pos_raw / sd(shock_pos_raw[shock_pos_raw > 0], na.rm = TRUE),
             shock_neg = shock_neg_raw / sd(shock_neg_raw[shock_neg_raw < 0], na.rm = TRUE)
         )
@@ -848,7 +848,7 @@ estimate_lp_h_asymmetric <- function(df, h) {
     # m <- lm(AFS_h ~ shock_pos + shock_neg + dplyr::lag(AFS_h) + Liabilities, data = df_h)
 
     # 1: Regress raw equity share
-    # m <- lm(S_h ~ shock_pos + shock_neg + dplyr::lag(S_h) + Private.businesses + Real.estate + Liabilities, data = df_h)
+    m <- lm(S_h ~ shock_pos + shock_neg + dplyr::lag(S_h) + Private.businesses + Real.estate + Liabilities, data = df_h)
 
     ## Regress raw equity share using total financial assets as denominator
     # m <- lm(FS_h ~ shock_pos + shock_neg + dplyr::lag(FS_h) + Liabilities, data = df_h)
@@ -883,18 +883,22 @@ lp_results_asymmetric <- shock_df |>
 
 irf_asymmetric <- lp_results_asymmetric |>
     filter(term %in% c("shock_pos", "shock_neg")) |>
-    filter(!group %in% c("RemainingTop1", "TopPt1")) |>
+    # filter(!group %in% c("RemainingTop1", "TopPt1")) |>
+    # filter TopPt1
+    filter(group == "TopPt1") |>
     # rearrange by next9, top1, bottom50, next40 in order
-    mutate(group = factor(group, levels = c("Next9", "Top1", "Bottom50", "Next40"))) |>
+    # mutate(group = factor(group, levels = c("Next9", "Top1", "Bottom50", "Next40"))) |>
     filter(term %in% c("shock_pos", "shock_neg")) |>
     dplyr::select(group, h, term, estimate, std.error, p.value)
 
 # preserve results in raw share
 irf_asymmetric_raw <- lp_results_asymmetric |>
     filter(term %in% c("shock_pos", "shock_neg")) |>
-    filter(!group %in% c("RemainingTop1", "TopPt1")) |>
+    # filter(!group %in% c("RemainingTop1", "TopPt1")) |>
+    # filter TopPt1
+    filter(group == "TopPt1") |>
     # rearrange by next9, top1, bottom50, next40 in order
-    mutate(group = factor(group, levels = c("Next9", "Top1", "Bottom50", "Next40"))) |>
+    # mutate(group = factor(group, levels = c("Next9", "Top1", "Bottom50", "Next40"))) |>
     filter(term %in% c("shock_pos", "shock_neg")) |>
     dplyr::select(group, h, term, estimate, std.error, p.value)
 
@@ -1099,6 +1103,85 @@ irf <- ggplot(irf_asymmetric, aes(x = h, y = estimate, color = term)) +
 irf
 
 #ggsave("figs/irf_loc_asym_dec_flex.png", irf, width = 10, height = 6, dpi = 350)
+
+### irf for TopPt1
+irf <- ggplot(irf_asymmetric %>% filter(group == "TopPt1"), aes(x = h, y = estimate, color = term)) +
+    geom_line(aes(linetype = "dashed"), size = 1.1) +
+    geom_line(
+        data = passive_drift %>% filter(group == "TopPt1"),
+        aes(x = h, y = estimate_passive, color = term, linetype = "solid"),
+        size = 1.1,
+        inherit.aes = FALSE
+    ) +
+    geom_ribbon(
+        aes(
+            ymin = estimate - 1.96 * std.error,
+            ymax = estimate + 1.96 * std.error,
+            fill = term
+        ),
+        alpha = 0.15,
+        color = NA,
+        show.legend = FALSE
+    ) +
+    geom_hline(yintercept = 0, color = "black", size = 0.5, linetype = "dotted") +
+    scale_color_manual(
+        values = c("shock_pos" = "#4e916e", "shock_neg" = "#8e517a"),
+        breaks = c("shock_pos", "shock_neg"),
+        labels = c("shock positive", "shock negative")
+    ) +
+    scale_fill_manual(
+        values = c("shock_pos" = "#4e916e", "shock_neg" = "#8e517a"),
+        breaks = c("shock_pos", "shock_neg"),
+        labels = c("shock positive", "shock negative")
+    ) +
+    guides(linetype = "none") +
+    labs(title = NULL, x = NULL, y = NULL) +
+    theme_minimal(base_size = 14) +
+    theme(
+        legend.title = element_blank(),
+        legend.text = element_text(size = 8),
+        legend.key.size = unit(0.5, "cm"),
+        legend.position = c(0.98, 1),
+        legend.justification = c(1, 1),
+        legend.background = element_rect(fill = alpha("white", 0.5), color = NA)
+    )
+
+irf
+
+loc_gen <- irf 
+loc_fle <- irf
+glo_gen <- irf
+glo_fle <- irf
+
+p_loc_gen <- loc_gen + 
+            ggtitle("(local, general)") + 
+            theme(plot.title = element_text(hjust = 0.5, size = 14)) +
+            # no legend
+            theme(legend.position = "none")
+
+p_loc_fle <- loc_fle + 
+            ggtitle("(local, flexible)") + 
+            theme(plot.title = element_text(hjust = 0.5, size = 14)) +
+            theme(legend.position = "none")
+
+p_glo_gen <- glo_gen + 
+            ggtitle("(global, general)") + 
+            theme(plot.title = element_text(hjust = 0.5, size = 14)) +
+            theme(legend.position = "none")
+
+p_glo_fle <- glo_fle + 
+            ggtitle("(global, flexible)") + 
+            theme(plot.title = element_text(hjust = 0.5, size = 14)) +
+            theme(legend.position = "none")
+
+library(gridExtra)
+
+grid.arrange(p_glo_fle, p_loc_fle, p_glo_gen, p_loc_gen, ncol = 2)
+
+p <- grid.arrange(p_glo_fle, p_loc_fle, p_glo_gen, p_loc_gen, ncol = 2)
+
+
+# ggsave("figs++/toppt1.png", p, width = 10, height = 6, dpi = 350)
 
 
 # Panel LPs -------------------------------------------------------

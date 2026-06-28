@@ -1,7 +1,6 @@
 Thesis Ideas
 
 <write>
-- cleaner titles for figures and tables
 
 <Introduction>
 
@@ -11,34 +10,15 @@ Thesis Ideas
 
 <Data>
 
-
 <Method>
 
-
 <Analysis>
-- Limited sample size increases standard errors. Responses might actually be significant (60-80 in asymmetric)
-- Quantitative interpretation: 1-SD shock reduces … by 0.1 percentage points
-- report 2008 sample split threshold
 
 <Robustness>
-- 0.1 % (though gabaixetal2023 SCF does not accurately capture wealth at the extreme right tail, vs DFA using Forbes 400)
-- left-heavy, right-leaning U-shaped sensitivity
-
-
 
 <Discussion and Concluding Remarks>
-- labor income that expands total pie
-- consumption that shrinks total pie to materially address utility
-- regularly (monthly)
-- capital gains tax. Inert due to this? Active despite this? 
-- age, education
-- age -> inheritance tax 
-- data from EU: limited but might be useful
 
-- economic performance and conditions (e.g., deflation), 
-- regulatory environment (e.g., capital income tax), 
-- fundamental differences in portfolio composition (e.g., large cash), 
-- deeper look into asset types
+
 
 
 STRUCTURE: baseline (systematic + idiosyncratic, general, total): symmetric IRF -> raw share IRF-> decomposed IRF, robustness*2 (with flexible benchmarks) + panel LP*4, more in discussion (real estate, private business, inflow to other components(/total financial assets), adding-up structure as a consistency check, pre;post-2008), appendix includes additional figs and tabs.
